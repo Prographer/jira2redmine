@@ -1,5 +1,5 @@
 <h1>Update to work with latest Jira backup</h1>
-I have update this script to migrate our Jira cloud to Redmine 3.3. In recent backup from Jira, the xml format changed a little bit. 
+I have updated this script to migrate our Jira cloud to Redmine 3.3. In recent backup from Jira, the xml format changed a little bit. 
 In Jira cloud, go to System -> Backup and create backup for Jira server.
 
 
