@@ -13,12 +13,12 @@ module JiraMigration
   ############## Configuration mapping file. Maps Jira Entities to Redmine Entities. Generated on the first run.
   CONF_FILE = 'map_jira_to_redmine.yml'
   ############## Jira backup main xml file with all data
-  ENTITIES_FILE = 'entities.xml'
+  ENTITIES_FILE = '/root/entities.xml'
   ############## Location of jira attachements
-  JIRA_ATTACHMENTS_DIR = 'attachments'
+  JIRA_ATTACHMENTS_DIR = '/root/data/attachments'
   #JIRA_ATTACHMENTS_DIR = '/home/ubuntu/JIRA-backup-20150303/data/attachments'
   ############## Jira URL
-  $JIRA_WEB_URL = 'https://glorium.jira.com'
+  $JIRA_WEB_URL = 'https://dtnsolutions.atlassian.net'
   #$JIRA_WEB_URL = 'https://leasepipeline.atlassian.net'
 
   class BaseJira
@@ -71,14 +71,18 @@ module JiraMigration
         self.before_save(record)
       end
 
-      record.save!
-      record.reload
-      self.map[self.jira_id] = record
-      self.new_record = record
-      if self.respond_to?('post_migrate')
-        self.post_migrate(record, self.is_new)
+      begin	
+            record.save!
+            record.reload
+            self.map[self.jira_id] = record
+            self.new_record = record
+            if self.respond_to?('post_migrate')
+                  self.post_migrate(record, self.is_new)
+            end
+            record.reload
+      rescue => exception
+	        puts "Error saving record: " + self.jira_id.to_s
       end
-      record.reload
       return record
     end
     def retrieve
@@ -245,7 +249,8 @@ module JiraMigration
       @jira_reporter = node_tag['reporter'].to_s
     end
     def jira_marker
-      return "FROM JIRA: \"#{self.jira_key}\":#{$JIRA_WEB_URL}/browse/#{self.jira_key}"
+      return "FROM JIRA: " + $MAP_ISSUE_TO_PROJECT_KEY[self.jira_id][:issue_key] +" (#{$JIRA_WEB_URL}/browse/" + $MAP_ISSUE_TO_PROJECT_KEY[self.jira_id][:issue_key] + ")"
+      #return "FROM JIRA: \"#{self.jira_key}\":#{$JIRA_WEB_URL}/browse/#{self.jira_key}"
     end
     def retrieve
       Issue.where("description Like '#{self.jira_marker}%'").first()
@@ -339,8 +344,8 @@ module JiraMigration
       super
       # get a body from a comment
       # comment can have the comment body as a attribute or as a child tag
-      #@jira_body = @tag["body"] || @tag.at("body").text
-      @jira_body = node['body']
+      @jira_body = @tag["body"] || @tag.at("body").text
+      #@jira_body = node['body']
     end
 
     def jira_marker
@@ -389,20 +394,21 @@ module JiraMigration
       # <PROJECTKEY>/<ISSUE-KEY>/<ATTACHMENT_ID>_filename.ext
       #
       # We have to recreate this path in order to copy the file
-      issue_key = $MAP_ISSUE_TO_PROJECT_KEY[self.jira_issue][:issue_key]
-      project_key = $MAP_ISSUE_TO_PROJECT_KEY[self.jira_issue][:project_key]
+      issue_key = $MAP_ISSUE_TO_PROJECT_KEY[self.jira_issue][:issue_orig_key]
+      project_key = $MAP_ISSUE_TO_PROJECT_KEY[self.jira_issue][:project_orig_key]
       jira_attachment_file = File.join(JIRA_ATTACHMENTS_DIR,
                                        project_key,
+                                       "10000",
                                        issue_key,
                                        "#{self.jira_id}")
       puts "Jira Attachment File: #{jira_attachment_file}"
       if File.exists? jira_attachment_file
         new_record.file = File.open(jira_attachment_file)
         puts "Setting attachment #{jira_attachment_file} for record"
-        # redmine_attachment_file = File.join(Attachment.storage_path, new_record.disk_filename)
+        redmine_attachment_file = File.join(Attachment.storage_path, new_record.disk_filename)
 
-        # puts "Copying attachment [#{jira_attachment_file}] to [#{redmine_attachment_file}]"
-        # FileUtils.cp jira_attachment_file, redmine_attachment_file
+        puts "Copying attachment [#{jira_attachment_file}] to [#{redmine_attachment_file}]"
+        FileUtils.cp jira_attachment_file, redmine_attachment_file
       else
         puts "Attachment file [#{jira_attachment_file}] not found. Skipping copy."
       end
@@ -524,6 +530,7 @@ module JiraMigration
 
   $MAP_ISSUE_TO_PROJECT_KEY = {}
   $MAP_PROJECT_ID_TO_PROJECT_KEY = {}
+  $MAP_PROJECT_ID_TO_PROJECT_ORIGINAL_KEY = {}
 
 
   # gets all mapping options
@@ -632,6 +639,7 @@ module JiraMigration
       linktype = migrated_issue_link_types[link['linktype']]
       issue_from = JiraIssue::MAP[link['source']]
       issue_to = JiraIssue::MAP[link['destination']]
+      begin
       if linktype.downcase == 'subtask' or linktype.downcase == 'epic-story'
         pp "Set Parent #{issue_from.id} to:", issue_to
         to_updated_on = issue_to.updated_on
@@ -646,6 +654,9 @@ module JiraMigration
         r = IssueRelation.new(:relation_type => linktype, :issue_from => issue_from, :issue_to => issue_to)
         r.save!
         r.reload
+      end
+      rescue => exception
+		puts "Error saving issue link"
       end
     end
   end
@@ -715,7 +726,13 @@ module JiraMigration
     # $doc.elements.each('/*/User') do |node|
     $doc.xpath('/*/User').each do |node|
       if(node['emailAddress'] =~ /\A([^@\s]+)@((?:[-a-z0-9]+\.)+[a-z]{2,})\z/i)
-        if !node['firstName'].to_s.empty? and !node['lastName'].to_s.empty? and node['active'].to_s == '1'
+        #if !node['firstName'].to_s.empty? and !node['lastName'].to_s.empty? and node['active'].to_s == '1'
+          if node['firstName'].to_s.empty?
+          		node['firstName'] = "No Firstname"
+          end
+          if node['lastName'].to_s.empty?
+          		node['lastName'] = "No Lastname"
+          end
           user = JiraUser.new(node)
 
           # Set user names (first name, last name)
@@ -729,7 +746,7 @@ module JiraMigration
 
           users.push(user)
           puts "Found JIRA user: #{user.jira_name}"
-        end
+        #end
       end
     end
 
@@ -832,11 +849,13 @@ namespace :jira_migration do
       # $doc.elements.each("/*/Project") do |p|
       $doc.xpath("/*/Project").each do |p|
         $MAP_PROJECT_ID_TO_PROJECT_KEY[p['id']] = p['key']
+        $MAP_PROJECT_ID_TO_PROJECT_ORIGINAL_KEY[p['id']] = p['originalkey']
       end
 
       #$doc.elements.each("/*/Issue") do |i|
       $doc.xpath("/*/Issue").each do |i|
-        $MAP_ISSUE_TO_PROJECT_KEY[i["id"]] = { :project_key => $MAP_PROJECT_ID_TO_PROJECT_KEY[i["project"]], :issue_key => i['key']}
+        $MAP_ISSUE_TO_PROJECT_KEY[i["id"]] = { :project_key => $MAP_PROJECT_ID_TO_PROJECT_KEY[i["project"]], :project_orig_key => $MAP_PROJECT_ID_TO_PROJECT_ORIGINAL_KEY[i["project"]], :issue_key => $MAP_PROJECT_ID_TO_PROJECT_KEY[i["project"]] + "-" + i['number'], :issue_orig_key => $MAP_PROJECT_ID_TO_PROJECT_ORIGINAL_KEY[i["project"]] + "-" + i['number']}
+        #$MAP_ISSUE_TO_PROJECT_KEY[i["id"]] = { :project_key => $MAP_PROJECT_ID_TO_PROJECT_KEY[i["project"]], :issue_key => i['key']}
       end
 
     end
@@ -919,6 +938,7 @@ namespace :jira_migration do
       types = $confs["types"]
       types.each do |key, value|
         t = Tracker.find_by_name(value)
+        puts "Tracker name: " + value
         if t.nil?
           Tracker.new(name: value)
         end
@@ -988,7 +1008,7 @@ namespace :jira_migration do
         i.migrate
       end
 
-      JiraMigration.migrate_fixed_versions
+      #JiraMigration.migrate_fixed_versions
       JiraMigration.migrate_issue_links
       JiraMigration.migrate_worktime
 
@@ -997,9 +1017,11 @@ namespace :jira_migration do
     desc "Migrates Jira Issues Comments to Redmine Issues Journals (Notes)"
     task :migrate_comments => :environment do
       comments = JiraMigration.parse_comments()
-      comments.reject!{|comment|comment.red_journalized.nil?}
+      puts "Total comments: " + comments.count.to_s
+#	comments.reject!{|comment|comment.red_journalized.nil?}
       comments.each do |c|
         #pp(c)
+        puts "Migrating comment: " + c.jira_issue.to_s
         c.migrate
       end
     end
@@ -1010,6 +1032,7 @@ namespace :jira_migration do
       attachs.reject!{|attach|attach.red_container.nil?}
       attachs.each do |a|
         #pp(c)
+        puts "Migrating attachment"
         a.migrate
       end
     end
@@ -1062,7 +1085,8 @@ namespace :jira_migration do
                                 :migrate_groups,
                                 :migrate_issues,
                                 :migrate_comments,
-                                :migrate_attachments] do
+                                :migrate_attachments
+								] do
       puts "All migrations done! :-)"
     end
 
